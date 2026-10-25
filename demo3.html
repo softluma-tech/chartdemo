@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BFSS — Engulfing Pattern</title>
+
+<style>
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #131722;
+    font-family: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif;
+    color: #d1d4dc;
+  }
+
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  /* Top Bar */
+  .top-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 48px;
+    background: #1e222d;
+    border-bottom: 1px solid #2a2e39;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    z-index: 10;
+    user-select: none;
+  }
+
+  .symbol-group {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .symbol-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #f0f3fa;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .timeframe-badge {
+    background: #2a2e39;
+    color: #787b86;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .live-ohlc {
+    display: flex;
+    gap: 14px;
+    font-size: 11px;
+    font-family: monospace;
+    color: #787b86;
+  }
+
+  .live-ohlc span b {
+    font-weight: 600;
+  }
+
+  .c-green { color: #089981; }
+  .c-red { color: #f23645; }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .switch-btn {
+    padding: 6px 14px;
+    background: #2a2e39;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    color: #787b86;
+    transition: all 0.2s ease;
+  }
+
+  .switch-btn.active.call {
+    background: rgba(8, 153, 129, 0.2);
+    color: #089981;
+    border-color: #089981;
+  }
+
+  .switch-btn.active.put {
+    background: rgba(242, 54, 69, 0.2);
+    color: #f23645;
+    border-color: #f23645;
+  }
+
+  .replay-btn {
+    padding: 6px 12px;
+    background: #2962ff;
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.2s;
+  }
+
+  .replay-btn:hover {
+    background: #1e53e5;
+  }
+
+  @media (max-width: 768px) {
+    .live-ohlc { display: none; }
+    .top-bar { padding: 0 10px; }
+  }
+</style>
+</head>
+
+<body>
+<div class="top-bar">
+  <div class="symbol-group">
+    <div class="symbol-name">
+      EUR/USD (OTC)
+      <span class="timeframe-badge">1M</span>
+    </div>
+    <div class="live-ohlc" id="ohlcDisplay">
+      <span>O <b id="barO">1.08200</b></span>
+      <span>H <b id="barH">1.08240</b></span>
+      <span>L <b id="barL">1.08180</b></span>
+      <span>C <b id="barC">1.08235</b></span>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="switch-btn active call" id="btnCall" type="button">CALL SETUP</button>
+    <button class="switch-btn put" id="btnPut" type="button">PUT SETUP</button>
+    <button class="replay-btn" id="replayBtn" type="button">↺ Replay</button>
+  </div>
+</div>
+
+<canvas id="chart"></canvas>
+
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("chart");
+  const ctx = canvas.getContext("2d");
+
+  const btnCall = document.getElementById("btnCall");
+  const btnPut = document.getElementById("btnPut");
+  const replayBtn = document.getElementById("replayBtn");
+
+  const barO = document.getElementById("barO");
+  const barH = document.getElementById("barH");
+  const barL = document.getElementById("barL");
+  const barC = document.getElementById("barC");
+
+  const UP_COLOR = "#089981";
+  const DOWN_COLOR = "#f23645";
+  const GRID_COLOR = "#1f232f";
+  const TEXT_COLOR = "#787b86";
+
+  let mode = "CALL";
+
+  const easeInOutQuad = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  // Natural market price movements (realistic wicks and body variations)
+  const callScenario = [
+    { o: 1.08450, c: 1.08380, h: 1.08465, l: 1.08360 },
+    { o: 1.08380, c: 1.08310, h: 1.08395, l: 1.08290 },
+    { o: 1.08310, c: 1.08340, h: 1.08360, l: 1.08295 },
+    { o: 1.08340, c: 1.08260, h: 1.08350, l: 1.08240 },
+    { o: 1.08260, c: 1.08200, h: 1.08275, l: 1.08185 },
+    { o: 1.08200, c: 1.08150, h: 1.08210, l: 1.08135 },
+    // Engulfed red candle
+    { o: 1.08150, c: 1.08110, h: 1.08160, l: 1.08095 },
+    // Bullish Engulfing
+    { o: 1.08090, c: 1.08220, h: 1.08235, l: 1.08070 },
+    // Next 1-Candle Expiry (Win)
+    { o: 1.08220, c: 1.08345, h: 1.08360, l: 1.08205 }
+  ];
+
+  const putScenario = [
+    { o: 1.08050, c: 1.08120, h: 1.08135, l: 1.08035 },
+    { o: 1.08120, c: 1.08190, h: 1.08210, l: 1.08105 },
+    { o: 1.08190, c: 1.08160, h: 1.08205, l: 1.08140 },
+    { o: 1.08160, c: 1.08240, h: 1.08250, l: 1.08150 },
+    { o: 1.08240, c: 1.08300, h: 1.08315, l: 1.08225 },
+    { o: 1.08300, c: 1.08350, h: 1.08365, l: 1.08290 },
+    // Engulfed green candle
+    { o: 1.08350, c: 1.08390, h: 1.08405, l: 1.08340 },
+    // Bearish Engulfing
+    { o: 1.08410, c: 1.08280, h: 1.08430, l: 1.08265 },
+    // Next 1-Candle Expiry (Win)
+    { o: 1.08280, c: 1.08155, h: 1.08295, l: 1.08140 }
+  ];
+
+  let rawCandles = callScenario;
+  const signalIndex = 7;
+  const expiryIndex = 8;
+
+  // Realistic intra-candle price ticks generator for fluid natural building
+  function getTickPrice(candle, fraction) {
+    const o = candle.o;
+    const c = candle.c;
+    const h = candle.h;
+    const l = candle.l;
+
+    if (fraction <= 0) return { cur: o, high: o, low: o };
+    if (fraction >= 1) return { cur: c, high: h, low: l };
+
+    // Sub-segment route: Open -> Initial pull towards wick -> Opposite wick -> Close
+    const isUp = c >= o;
+    let cur, curH, curL;
+
+    if (fraction < 0.25) {
+      const t = fraction / 0.25;
+      const target = isUp ? l : h;
+      cur = o + (target - o) * easeInOutQuad(t);
+    } else if (fraction < 0.70) {
+      const t = (fraction - 0.25) / 0.45;
+      const start = isUp ? l : h;
+      const target = isUp ? h : l;
+      cur = start + (target - start) * easeInOutQuad(t);
+    } else {
+      const t = (fraction - 0.70) / 0.30;
+      const start = isUp ? h : l;
+      cur = start + (c - start) * easeInOutQuad(t);
+    }
+
+    const midMin = isUp ? l : Math.min(o, cur);
+    const midMax = isUp ? Math.max(o, cur) : h;
+
+    curH = fraction > 0.45 ? (isUp ? Math.max(cur, h) : h) : midMax;
+    curL = fraction > 0.45 ? (isUp ? l : Math.min(cur, l)) : midMin;
+
+    return {
+      cur: parseFloat(cur.toFixed(5)),
+      high: Math.max(o, cur, curH),
+      low: Math.min(o, cur, curL)
+    };
+  }
+
+  // Animation Timers
+  const pastCandlesDuration = 3.5;
+  const expiryCandleDuration = 5.0; // Realistic active trade candle build
+  const totalDuration = pastCandlesDuration + expiryCandleDuration + 4.0;
+
+  let width = 0;
+  let height = 0;
+  let elapsed = 0;
+  let lastTime = null;
+  let frameId = null;
+
+  function draw() {
+    if (!width || !height) return;
+
+    ctx.clearRect(0, 0, width, height);
+
+    const priceAxisWidth = 75;
+    const timeAxisHeight = 28;
+    const topBarHeight = 48;
+
+    const chartLeft = 0;
+    const chartRight = width - priceAxisWidth;
+    const chartTop = topBarHeight + 10;
+    const chartBottom = height - timeAxisHeight;
+
+    const chartW = chartRight - chartLeft;
+    const chartH = chartBottom - chartTop;
+
+    // Price Bounds
+    const allMin = Math.min(...rawCandles.map(c => c.l));
+    const allMax = Math.max(...rawCandles.map(c => c.h));
+    const pad = (allMax - allMin) * 0.18;
+    const minPrice = allMin - pad;
+    const maxPrice = allMax + pad;
+
+    const getY = p => chartBottom - ((p - minPrice) / (maxPrice - minPrice)) * chartH;
+
+    // Horizontal Spacing
+    const totalBars = rawCandles.length + 3; // Space on right for live edge
+    const barSpacing = chartW / totalBars;
+    const candleWidth = Math.round(clamp(barSpacing * 0.72, 14, 40));
+    const getX = i => chartLeft + (i + 1.2) * barSpacing;
+
+    // Background Grid Lines
+    ctx.strokeStyle = GRID_COLOR;
+    ctx.lineWidth = 1;
+
+    // Price Grid (Horizontal)
+    const priceSteps = 8;
+    for (let i = 0; i <= priceSteps; i++) {
+      const p = minPrice + (i / priceSteps) * (maxPrice - minPrice);
+      const y = Math.round(getY(p)) + 0.5;
+
+      ctx.beginPath();
+      ctx.moveTo(chartLeft, y);
+      ctx.lineTo(chartRight, y);
+      ctx.stroke();
+
+      // Price Label on Axis
+      ctx.fillStyle = TEXT_COLOR;
+      ctx.font = "11px -apple-system, monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(p.toFixed(5), chartRight + 8, y);
+    }
+
+    // Time Grid (Vertical)
+    for (let i = 0; i < rawCandles.length + 2; i += 2) {
+      const x = Math.round(getX(i)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x, chartTop);
+      ctx.lineTo(x, chartBottom);
+      ctx.stroke();
+
+      // Time tag
+      ctx.fillStyle = TEXT_COLOR;
+      ctx.font = "11px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText(`10:${30 + i}`, x, chartBottom + 7);
+    }
+
+    // Current State Progression
+    let liveCandleIdx = 0;
+    let currentBarTick = null;
+
+    if (elapsed <= pastCandlesDuration) {
+      const progress = (elapsed / pastCandlesDuration) * signalIndex;
+      liveCandleIdx = Math.min(signalIndex, Math.floor(progress));
+      const frac = progress - liveCandleIdx;
+      currentBarTick = getTickPrice(rawCandles[liveCandleIdx], frac);
+    } else {
+      liveCandleIdx = expiryIndex;
+      const expElapsed = elapsed - pastCandlesDuration;
+      const frac = clamp(expElapsed / expiryCandleDuration, 0, 1);
+      currentBarTick = getTickPrice(rawCandles[expiryIndex], frac);
+    }
+
+    // Update Top Bar OHLC
+    const curActiveCandle = rawCandles[liveCandleIdx];
+    barO.innerText = curActiveCandle.o.toFixed(5);
+    barH.innerText = currentBarTick.high.toFixed(5);
+    barL.innerText = currentBarTick.low.toFixed(5);
+    barC.innerText = currentBarTick.cur.toFixed(5);
+    const isCurGreen = currentBarTick.cur >= curActiveCandle.o;
+    barC.className = isCurGreen ? "c-green" : "c-red";
+
+    // Draw Formed & Active Candles
+    for (let i = 0; i <= liveCandleIdx; i++) {
+      const candle = rawCandles[i];
+      const isLive = (i === liveCandleIdx);
+
+      const open = candle.o;
+      const close = isLive ? currentBarTick.cur : candle.c;
+      const high = isLive ? currentBarTick.high : candle.h;
+      const low = isLive ? currentBarTick.low : candle.l;
+
+      const isUp = close >= open;
+      const color = isUp ? UP_COLOR : DOWN_COLOR;
+
+      const px = Math.round(getX(i));
+      const yOpen = Math.round(getY(open));
+      const yClose = Math.round(getY(close));
+      const yHigh = Math.round(getY(high));
+      const yLow = Math.round(getY(low));
+
+      const bodyTop = Math.min(yOpen, yClose);
+      const bodyHeight = Math.max(2, Math.abs(yOpen - yClose));
+      const bodyLeft = Math.round(px - candleWidth / 2);
+
+      // Centered 1px Wick
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px + 0.5, yHigh);
+      ctx.lineTo(px + 0.5, yLow);
+      ctx.stroke();
+
+      // Real Solid Body
+      ctx.fillStyle = color;
+      ctx.fillRect(bodyLeft, bodyTop, candleWidth, bodyHeight);
+    }
+
+    // Binary Trade Overlay (Strike line, Timer, and Result Badge)
+    if (elapsed > pastCandlesDuration) {
+      const expTimeElapsed = elapsed - pastCandlesDuration;
+      const isExpired = expTimeElapsed >= expiryCandleDuration;
+      const strikePrice = rawCandles[expiryIndex].o;
+      const yStrike = Math.round(getY(strikePrice)) + 0.5;
+
+      const startX = Math.round(getX(expiryIndex) - candleWidth / 2);
+      const endX = chartRight;
+
+      // Strike Line
+      ctx.strokeStyle = "#2962ff";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(startX, yStrike);
+      ctx.lineTo(endX, yStrike);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Strike Price Tag on Right Axis
+      ctx.fillStyle = "#2962ff";
+      ctx.fillRect(chartRight, yStrike - 10, priceAxisWidth, 20);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 11px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(strikePrice.toFixed(5), chartRight + 6, yStrike);
+
+      // Clean Status Flag Over Current Candle
+      const curX = Math.round(getX(expiryIndex));
+      const isCall = mode === "CALL";
+      const tagY = isCall ? getY(rawCandles[expiryIndex].h) - 24 : getY(rawCandles[expiryIndex].l) + 24;
+
+      if (!isExpired) {
+        const remainingSec = Math.max(1, Math.ceil((1 - (expTimeElapsed / expiryCandleDuration)) * 60));
+        // Active Expiry Pill
+        ctx.fillStyle = isCall ? "rgba(8, 153, 129, 0.15)" : "rgba(242, 54, 69, 0.15)";
+        ctx.strokeStyle = isCall ? UP_COLOR : DOWN_COLOR;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(curX - 42, tagY - 11, 84, 22, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = isCall ? UP_COLOR : DOWN_COLOR;
+        ctx.font = "bold 11px -apple-system, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(`${mode} 00:${remainingSec < 10 ? '0' : ''}${remainingSec}`, curX, tagY);
+      } else {
+        // Result Pill
+        ctx.fillStyle = UP_COLOR;
+        ctx.beginPath();
+        ctx.roundRect(curX - 44, tagY - 11, 88, 22, 4);
+        ctx.fill();
+
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 11px -apple-system, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("WON +$85.00", curX, tagY);
+      }
+    }
+
+    // Live Current Price Tracking Line on Edge
+    const liveY = Math.round(getY(currentBarTick.cur)) + 0.5;
+    ctx.strokeStyle = isCurGreen ? UP_COLOR : DOWN_COLOR;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(chartLeft, liveY);
+    ctx.lineTo(chartRight, liveY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Live Cursor Tag
+    ctx.fillStyle = isCurGreen ? UP_COLOR : DOWN_COLOR;
+    ctx.fillRect(chartRight, liveY - 10, priceAxisWidth, 20);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 11px monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(currentBarTick.cur.toFixed(5), chartRight + 6, liveY);
+  }
+
+  function resize() {
+    width = innerWidth;
+    height = innerHeight;
+    const ratio = Math.max(window.devicePixelRatio || 1, 1);
+
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    draw();
+  }
+
+  function animate(now) {
+    frameId = null;
+    if (lastTime === null) lastTime = now;
+
+    elapsed = Math.min(totalDuration, elapsed + Math.min((now - lastTime) / 1000, 0.08));
+    lastTime = now;
+    draw();
+
+    if (elapsed < totalDuration) {
+      frameId = requestAnimationFrame(animate);
+    }
+  }
+
+  function restart() {
+    if (frameId !== null) {
+      cancelAnimationFrame(frameId);
+      frameId = null;
+    }
+    elapsed = 0;
+    lastTime = null;
+    frameId = requestAnimationFrame(animate);
+  }
+
+  btnCall.addEventListener("click", () => {
+    if (mode === "CALL") return;
+    mode = "CALL";
+    rawCandles = callScenario;
+    btnCall.classList.add("active");
+    btnPut.classList.remove("active");
+    restart();
+  });
+
+  btnPut.addEventListener("click", () => {
+    if (mode === "PUT") return;
+    mode = "PUT";
+    rawCandles = putScenario;
+    btnPut.classList.add("active");
+    btnCall.classList.remove("active");
+    restart();
+  });
+
+  replayBtn.addEventListener("click", restart);
+  window.addEventListener("resize", resize);
+
+  resize();
+  frameId = requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

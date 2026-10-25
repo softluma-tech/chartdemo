@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BFSS — Market Formation</title>
+
+<style>
+* { box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #0b0911;
+  font-family: Arial, sans-serif;
+}
+
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+.branding {
+  position: fixed;
+  top: 24px;
+  left: 28px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand svg {
+  width: 32px;
+  height: 36px;
+  color: #bb9aff;
+}
+
+.brand span {
+  color: #eee8f8;
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: 4px;
+}
+
+#topic {
+  margin-top: 16px;
+  color: #bea5db;
+  font-size: 15px;
+}
+
+@media (max-width: 600px) {
+  .branding { top: 18px; left: 18px; }
+  .brand svg { width: 27px; height: 31px; }
+  .brand span { font-size: 21px; }
+  #topic { font-size: 13px; margin-top: 12px; }
+}
+</style>
+</head>
+
+<body>
+<div class="branding">
+  <div class="brand">
+    <svg viewBox="0 0 40 40" aria-hidden="true">
+      <path fill="currentColor"
+        d="M7 29V12l9-5v18l7-4V7l10 6v16L20 37Z"/>
+    </svg>
+    <span>BFSS</span>
+  </div>
+  <div id="topic">Uptrend</div>
+</div>
+
+<canvas
+  id="chart"
+  aria-label="Synthetic uptrend, downtrend and hammer formation"
+></canvas>
+
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("chart");
+  const ctx = canvas.getContext("2d");
+  const topic = document.getElementById("topic");
+
+  const GREEN = "#27b982";
+  const RED = "#df625d";
+  const PURPLE = "#bda0ed";
+  const TEAL = "#80bdb1";
+
+  let seed = 91827;
+
+  function random() {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  }
+
+  const between = (a, b) => a + random() * (b - a);
+  const clamp = v => Math.max(0, Math.min(1, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  function ease(v) {
+    const t = clamp(v);
+    return t * t * (3 - 2 * t);
+  }
+
+  /*
+   * Synthetic educational prices.
+   * Shapes illustrate structure; they are not trade predictions.
+   */
+  function buildUptrend() {
+    const rows = [];
+    const swings = [];
+    let previous = 100;
+
+    function leg(target, rising, count) {
+      const start = previous;
+
+      const weights = Array.from(
+        { length: count },
+        () => between(.25, 1.9)
+      );
+
+      const total = weights.reduce((a, b) => a + b, 0);
+      let accumulated = 0;
+
+      for (let i = 0; i < count; i++) {
+        accumulated += weights[i];
+
+        const progress = accumulated / total;
+        const baseline = lerp(start, target, progress);
+
+        const noise = i === count - 1
+          ? 0
+          : Math.sin(progress * Math.PI) * between(-2.2, 2.2);
+
+        let close = Math.max(
+          Math.min(start, target) + .12,
+          Math.min(
+            Math.max(start, target) - .12,
+            baseline + noise
+          )
+        );
+
+        if (i === count - 1) close = target;
+
+        const open = previous;
+
+        let high = Math.min(
+          Math.max(open, close) + between(.15, 1.8),
+          Math.max(start, target) + .1
+        );
+
+        let low = Math.max(
+          Math.min(open, close) - between(.15, 2),
+          Math.min(start, target) - .1
+        );
+
+        high = Math.max(high, open, close);
+        low = Math.min(low, open, close);
+
+        if (i === count - 1) {
+          if (rising) high = target + 1;
+          else low = target - 1;
+        }
+
+        rows.push({
+          open, high, low, close,
+          highFirst: random() > .5
+        });
+
+        previous = close;
+      }
+
+      const index = rows.length - 1;
+
+      swings.push({
+        index,
+        high: rising,
+        price: rising ? rows[index].high : rows[index].low
+      });
+    }
+
+    for (let wave = 0; wave < 5; wave++) {
+      leg(120 + wave * 20, true, 7);
+      leg(110 + wave * 20, false, 5);
+    }
+
+    return { rows, swings };
+  }
+
+  const up = buildUptrend();
+
+  // Mirror the rising structure to create a clear decline.
+  const mirror = 330;
+
+  const down = {
+    rows: up.rows.map(c => ({
+      open: mirror - c.open,
+      high: mirror - c.low,
+      low: mirror - c.high,
+      close: mirror - c.close,
+      highFirst: !c.highFirst
+    })),
+
+    swings: up.swings.map(s => ({
+      index: s.index,
+      high: !s.high,
+      price: mirror - s.price
+    }))
+  };
+
+  /*
+   * Continue declining before the hammer.
+   * This gives the hammer the appropriate preceding context.
+   */
+  let lastClose = down.rows[down.rows.length - 1].close;
+
+  for (const move of [-5, -6.5, -4.5]) {
+    const close = lastClose + move;
+
+    down.rows.push({
+      open: lastClose,
+      high: lastClose + between(.4, 1),
+      low: close - between(.5, 1),
+      close,
+      highFirst: true
+    });
+
+    lastClose = close;
+  }
+
+  const hammer = {
+    open: lastClose,
+    close: lastClose + 3.2,
+    high: lastClose + 3.8,
+    low: lastClose - 13,
+    highFirst: false
+  };
+
+  down.rows.push(hammer);
+
+  const hammerIndex = down.rows.length - 1;
+
+  const CANDLE_TIME = .18;
+  const LABEL_TIME = .34;
+
+  function timing(data) {
+    const formation = data.rows.length * CANDLE_TIME;
+    const labels = formation + .5;
+    const lines = labels + data.swings.length * LABEL_TIME + .4;
+    const end = lines + 2.8;
+
+    return { formation, labels, lines, end };
+  }
+
+  const upTiming = timing(up);
+  const downTiming = timing(down);
+
+  const downStart = upTiming.end + 1.5;
+  const zoomStart = downStart + downTiming.end + 1;
+  const zoomDuration = 3;
+  const totalDuration = zoomStart + zoomDuration + 7;
+
+  let width = 0;
+  let height = 0;
+  let elapsed = 0;
+  let lastTime = null;
+  let frameId = null;
+  let currentTopic = "";
+
+  function setTopic(text) {
+    if (text !== currentTopic) {
+      currentTopic = text;
+      topic.textContent = text;
+    }
+  }
+
+  function line(x1, y1, x2, y2, color, thickness = 1) {
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = thickness;
+    ctx.stroke();
+  }
+
+  function text(value, x, y, color, size = 12, align = "center") {
+    ctx.fillStyle = color;
+    ctx.font = `500 ${size}px Arial`;
+    ctx.textAlign = align;
+    ctx.textBaseline = "middle";
+    ctx.fillText(value, x, y);
+  }
+
+  function partial(c, fraction) {
+    const points = c.highFirst
+      ? [c.open, c.high, c.low, c.close]
+      : [c.open, c.low, c.high, c.close];
+
+    const progress = clamp(fraction) * 3;
+    const segment = Math.min(2, Math.floor(progress));
+
+    const price = lerp(
+      points[segment],
+      points[segment + 1],
+      ease(progress - segment)
+    );
+
+    const visited = points.slice(0, segment + 1).concat(price);
+
+    return {
+      open: c.open,
+      close: price,
+      high: Math.max(...visited),
+      low: Math.min(...visited)
+    };
+  }
+
+  function draw() {
+    if (!width || !height) return;
+
+    ctx.clearRect(0, 0, width, height);
+
+    const mobile = width < 650;
+    const showingDown = elapsed >= downStart;
+
+    const data = showingDown ? down : up;
+    const localTime = showingDown
+      ? elapsed - downStart
+      : elapsed;
+
+    const times = showingDown ? downTiming : upTiming;
+
+    const zoom = showingDown
+      ? ease((elapsed - zoomStart) / zoomDuration)
+      : 0;
+
+    setTopic(
+      zoom > .05
+        ? "Hammer"
+        : showingDown ? "Downtrend" : "Uptrend"
+    );
+
+    const left = mobile ? 24 : 45;
+    const right = width - left;
+    const top = mobile ? 130 : 140;
+    const bottom = height - (mobile ? 50 : 65);
+
+    const plotWidth = right - left;
+    const plotHeight = Math.max(80, bottom - top);
+
+    const rows = data.rows;
+
+    const minimum = Math.min(...rows.map(c => c.low));
+    const maximum = Math.max(...rows.map(c => c.high));
+    const padding = (maximum - minimum) * .14;
+
+    const spacing = plotWidth / (rows.length + 4);
+    const normalBody = Math.min(15, spacing * .7);
+
+    const baseX = i => left + (i + 2) * spacing;
+
+    const baseY = price =>
+      bottom -
+      (
+        (price - minimum + padding) /
+        (maximum - minimum + padding * 2)
+      ) * plotHeight;
+
+    /*
+     * Camera zoom:
+     * translate the final hammer to the center,
+     * then enlarge it while nearby candles leave the view.
+     */
+    const hammerRange = hammer.high - hammer.low;
+    const originalHammerHeight = Math.abs(
+      baseY(hammer.high) - baseY(hammer.low)
+    );
+
+    const targetScale = Math.max(
+      1,
+      plotHeight * .62 / originalHammerHeight
+    );
+
+    const scale = lerp(1, targetScale, zoom);
+
+    const centerX = (left + right) / 2;
+    const centerY = (top + bottom) / 2;
+
+    const focusX = showingDown ? baseX(hammerIndex) : centerX;
+    const focusY = showingDown
+      ? baseY((hammer.high + hammer.low) / 2)
+      : centerY;
+
+    const focusScreenX = lerp(focusX, centerX, zoom);
+    const focusScreenY = lerp(focusY, centerY, zoom);
+
+    const x = i =>
+      focusScreenX + (baseX(i) - focusX) * scale;
+
+    const y = price =>
+      focusScreenY + (baseY(price) - focusY) * scale;
+
+    const bodyWidth = Math.min(
+      mobile ? 43 : 65,
+      normalBody * scale
+    );
+
+    // Quiet vertical grid.
+    ctx.globalAlpha = 1 - zoom * .65;
+
+    for (let i = 0; i <= 12; i++) {
+      const px = left + plotWidth * i / 12;
+      line(px, top, px, bottom, "#ffffff05", .7);
+    }
+
+    ctx.globalAlpha = 1;
+
+    const progress = Math.min(
+      rows.length,
+      localTime / CANDLE_TIME
+    );
+
+    const completed = Math.floor(progress);
+    const visible = Math.min(rows.length, Math.ceil(progress));
+
+    // Clip enlarged candles to the chart area.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, top - 15, plotWidth, plotHeight + 30);
+    ctx.clip();
+
+    for (let i = 0; i < visible; i++) {
+      const fraction = i < completed ? 1 : progress - i;
+      const c = partial(rows[i], fraction);
+
+      const px = x(i);
+
+      if (px < left - bodyWidth || px > right + bodyWidth) continue;
+
+      const color = c.close >= c.open ? GREEN : RED;
+
+      // Fade surrounding candles during the final close-up.
+      ctx.globalAlpha = showingDown && i !== hammerIndex
+        ? 1 - zoom * .9
+        : 1;
+
+      line(
+        px, y(c.high),
+        px, y(c.low),
+        color,
+        lerp(mobile ? .8 : 1, 2, zoom)
+      );
+
+      ctx.fillStyle = color;
+
+      ctx.fillRect(
+        px - bodyWidth / 2,
+        Math.min(y(c.open), y(c.close)),
+        bodyWidth,
+        Math.max(1.5, Math.abs(y(c.open) - y(c.close)))
+      );
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // Mark the completed swing sequence.
+    data.swings.forEach((s, i) => {
+      const alpha =
+        ease((localTime - times.labels - i * LABEL_TIME) / .3) *
+        (1 - zoom);
+
+      if (alpha <= 0) return;
+
+      const initial = i < 2;
+
+      const name = initial
+        ? (s.high ? "H" : "L")
+        : showingDown
+          ? (s.high ? "LH" : "LL")
+          : (s.high ? "HH" : "HL");
+
+      ctx.globalAlpha = alpha;
+
+      text(
+        name,
+        x(s.index),
+        y(s.price) + (s.high ? -18 : 20),
+        s.high ? PURPLE : TEAL,
+        mobile ? 10 : 13
+      );
+
+      ctx.globalAlpha = 1;
+    });
+
+    // Exactly two structure lines, drawn after the markings.
+    function structureLine(points, delay, color) {
+      const amount = ease(
+        (localTime - times.lines - delay) / .9
+      );
+
+      if (!amount) return;
+
+      const first = points[0];
+      const last = points[points.length - 1];
+
+      const startX = x(first.index);
+      const startY = y(first.price);
+      const endX = x(last.index);
+      const endY = y(last.price);
+
+      ctx.globalAlpha = .75 * (1 - zoom);
+
+      line(
+        startX,
+        startY,
+        lerp(startX, endX, amount),
+        lerp(startY, endY, amount),
+        color,
+        1.2
+      );
+
+      ctx.globalAlpha = 1;
+    }
+
+    structureLine(
+      data.swings.filter(s => s.high).slice(1),
+      0,
+      PURPLE
+    );
+
+    structureLine(
+      data.swings.filter(s => !s.high).slice(1),
+      1,
+      TEAL
+    );
+
+    // Minimal hammer markings after the camera settles.
+    const detail = ease(
+      (elapsed - zoomStart - zoomDuration) / .8
+    );
+
+    if (detail > 0 && showingDown) {
+      const px = x(hammerIndex);
+      const bodyMiddle = y((hammer.open + hammer.close) / 2);
+      const wickMiddle = y((hammer.low + hammer.open) / 2);
+
+      const labelX = mobile
+        ? Math.min(right - 3, px + 55)
+        : Math.min(right - 10, px + 120);
+
+      const fontSize = mobile ? 10 : 13;
+
+      ctx.globalAlpha = detail;
+
+      line(
+        px + bodyWidth / 2 + 5,
+        bodyMiddle,
+        labelX - 8,
+        bodyMiddle,
+        "#bda0ed88"
+      );
+
+      text(
+        "Small body",
+        labelX,
+        bodyMiddle,
+        PURPLE,
+        fontSize,
+        "left"
+      );
+
+      line(
+        px + 5,
+        wickMiddle,
+        labelX - 8,
+        wickMiddle,
+        "#80bdb188"
+      );
+
+      text(
+        "Long lower wick",
+        labelX,
+        wickMiddle,
+        TEAL,
+        fontSize,
+        "left"
+      );
+
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function resize() {
+    width = innerWidth;
+    height = innerHeight;
+
+    const ratio = Math.min(devicePixelRatio || 1, 2);
+
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    draw();
+  }
+
+  function animate(now) {
+    frameId = null;
+
+    if (lastTime === null) lastTime = now;
+
+    elapsed = Math.min(
+      totalDuration,
+      elapsed + Math.min((now - lastTime) / 1000, .08)
+    );
+
+    lastTime = now;
+    draw();
+
+    if (elapsed < totalDuration) {
+      frameId = requestAnimationFrame(animate);
+    }
+  }
+
+  window.addEventListener("resize", resize);
+
+  document.addEventListener("visibilitychange", () => {
+    lastTime = null;
+
+    if (document.hidden && frameId !== null) {
+      cancelAnimationFrame(frameId);
+      frameId = null;
+    }
+
+    if (
+      !document.hidden &&
+      frameId === null &&
+      elapsed < totalDuration
+    ) {
+      frameId = requestAnimationFrame(animate);
+    }
+  });
+
+  resize();
+  frameId = requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

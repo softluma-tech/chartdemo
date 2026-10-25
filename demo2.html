@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BFSS — Market Structure & Hammer Analysis</title>
+
+<style>
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #090c10;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  .branding {
+    position: fixed;
+    top: 22px;
+    left: 26px;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .brand svg {
+    width: 28px;
+    height: 32px;
+    color: #a78bfa;
+    filter: drop-shadow(0 0 12px rgba(167, 139, 250, 0.5));
+  }
+
+  .brand span {
+    color: #f8fafc;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: 3px;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 6px 14px;
+    background: rgba(15, 23, 42, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 9999px;
+    color: #e2e8f0;
+    font-size: 13px;
+    font-weight: 600;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 10px #10b981;
+  }
+
+  .controls {
+    position: fixed;
+    bottom: 24px;
+    right: 28px;
+    z-index: 10;
+  }
+
+  .replay-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 18px;
+    background: rgba(30, 41, 59, 0.9);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 10px;
+    color: #f1f5f9;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    backdrop-filter: blur(10px);
+    transition: all 0.2s ease;
+  }
+
+  .replay-btn:hover {
+    background: rgba(51, 65, 85, 1);
+    border-color: #a78bfa;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(167, 139, 250, 0.3);
+  }
+
+  @media (max-width: 600px) {
+    .branding { top: 16px; left: 16px; }
+    .brand span { font-size: 18px; }
+    .status-badge { font-size: 11px; padding: 4px 10px; }
+    .controls { bottom: 16px; right: 16px; }
+    .replay-btn { padding: 7px 14px; font-size: 12px; }
+  }
+</style>
+</head>
+
+<body>
+<div class="branding">
+  <div class="brand">
+    <svg viewBox="0 0 40 40" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M7 29V12l9-5v18l7-4V7l10 6v16L20 37Z"
+      />
+    </svg>
+    <span>BFSS</span>
+  </div>
+  <div class="status-badge">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">Generating Market Cycle...</span>
+  </div>
+</div>
+
+<div class="controls">
+  <button class="replay-btn" id="replayBtn" type="button">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+      <path d="M3 3v5h5"/>
+    </svg>
+    Replay Cycle
+  </button>
+</div>
+
+<canvas id="chart"></canvas>
+
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("chart");
+  const ctx = canvas.getContext("2d");
+
+  const statusDot = document.getElementById("statusDot");
+  const statusText = document.getElementById("statusText");
+  const replayBtn = document.getElementById("replayBtn");
+
+  // TradingView Style Solid Palettes
+  const GREEN_UP = "#089981";
+  const GREEN_BORDER = "#10b981";
+  const RED_DOWN = "#f23645";
+  const RED_BORDER = "#f87171";
+
+  const HIGH_COLOR = "#a78bfa";
+  const LOW_COLOR = "#38bdf8";
+  const GOLD_LIGHT = "#fbbf24";
+
+  const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const easeOutQuad = t => 1 - (1 - t) * (1 - t);
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  // Explicit, well-proportioned swing dataset (26 candles total)
+  // Ensures thick bodies and readable price patterns
+  const candleData = [
+    // --- UPTREND LEG 1 ---
+    { o: 104, c: 110, h: 112, l: 103 },
+    { o: 110, c: 116, h: 117.5, l: 109 },
+    { o: 116, c: 122, h: 123.5, l: 114.5, swing: "H", high: true },
+    // Pullback 1
+    { o: 122, c: 118, h: 122.5, l: 116.5 },
+    { o: 118, c: 115, h: 119, l: 113.5, swing: "L", high: false },
+    // Uptrend Leg 2
+    { o: 115, c: 123, h: 124, l: 114 },
+    { o: 123, c: 132, h: 133.5, l: 121.5 },
+    { o: 132, c: 139, h: 141, l: 130.5, swing: "HH", high: true },
+    // Pullback 2
+    { o: 139, c: 133, h: 140, l: 131.5 },
+    { o: 133, c: 128, h: 134, l: 126.5, swing: "HL", high: false },
+    // Uptrend Leg 3 (Major Peak)
+    { o: 128, c: 138, h: 139.5, l: 127 },
+    { o: 138, c: 148, h: 149.5, l: 136.5 },
+    { o: 148, c: 156, h: 158, l: 146.5, swing: "HH", high: true },
+
+    // --- DOWNTREND LEG 1 ---
+    { o: 156, c: 147, h: 157, l: 145 },
+    { o: 147, c: 139, h: 148.5, l: 137, swing: "LL", high: false },
+    // Bear Pullback
+    { o: 139, c: 145, h: 147, l: 137.5, swing: "LH", high: true },
+    // Downtrend Leg 2
+    { o: 145, c: 136, h: 146, l: 134 },
+    { o: 136, c: 127, h: 137.5, l: 125, swing: "LL", high: false },
+    // Bear Pullback
+    { o: 127, c: 133, h: 134.5, l: 125.5, swing: "LH", high: true },
+    // Final Flush down to Support
+    { o: 133, c: 123, h: 134, l: 121 },
+    { o: 123, c: 114, h: 124.5, l: 112 },
+    // THE HAMMER CANDLE (Reversal Pinbar)
+    { o: 114, c: 119, h: 120, l: 101, isHammer: true, swing: "HAMMER", high: false }
+  ];
+
+  const hammerIndex = candleData.length - 1;
+
+  // Swings arrays
+  const uptrendSwings = [];
+  const downtrendSwings = [];
+
+  candleData.forEach((c, idx) => {
+    if (!c.swing) return;
+    const item = { index: idx, high: c.high, price: c.high ? c.h : c.l, label: c.swing };
+    if (idx <= 12) {
+      uptrendSwings.push(item);
+    } else {
+      downtrendSwings.push(item);
+    }
+  });
+
+  const globalMin = Math.min(...candleData.map(c => c.l));
+  const globalMax = Math.max(...candleData.map(c => c.h));
+  const globalPadding = (globalMax - globalMin) * 0.12;
+
+  // Animation Timeline
+  const candleSec = 0.28;
+  const formationEnd = candleData.length * candleSec;
+  const upLinesStart = formationEnd + 0.4;
+  const downLinesStart = upLinesStart + 1.2;
+  const zoomStart = downLinesStart + 1.5;
+  const zoomDuration = 2.4;
+  const totalAnimationTime = zoomStart + zoomDuration + 14;
+
+  let width = 0;
+  let height = 0;
+  let elapsed = 0;
+  let lastTime = null;
+  let frameId = null;
+
+  function crispLine(x1, y1, x2, y2, color, thickness = 1) {
+    ctx.save();
+    ctx.beginPath();
+    const offset = (Math.round(thickness) % 2 === 1) ? 0.5 : 0;
+    ctx.moveTo(Math.round(x1) + offset, Math.round(y1));
+    ctx.lineTo(Math.round(x2) + offset, Math.round(y2));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = thickness;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function draw() {
+    if (!width || !height) return;
+
+    ctx.clearRect(0, 0, width, height);
+
+    const mobile = width < 768;
+    const priceAxisWidth = mobile ? 50 : 70;
+
+    const plotLeft = mobile ? 20 : 45;
+    const plotRight = width - priceAxisWidth;
+    const plotTop = mobile ? 95 : 85;
+    const plotBottom = height - 45;
+
+    const plotW = plotRight - plotLeft;
+    const plotH = plotBottom - plotTop;
+
+    let zoomT = 0;
+    if (elapsed > zoomStart) {
+      zoomT = easeInOutCubic(clamp((elapsed - zoomStart) / zoomDuration, 0, 1));
+    }
+
+    const totalBars = candleData.length;
+    const hammer = candleData[hammerIndex];
+
+    // Horizontal Spacing & Centering
+    const defaultVisibleBars = totalBars + 2;
+    const zoomedVisibleBars = mobile ? 4.2 : 6.0;
+    const currentVisibleBars = defaultVisibleBars + (zoomedVisibleBars - defaultVisibleBars) * zoomT;
+
+    const defaultCenterIdx = totalBars / 2;
+    const targetCenterIdx = hammerIndex + (mobile ? 0 : 1.3);
+    const currentCenterIdx = defaultCenterIdx + (targetCenterIdx - defaultCenterIdx) * zoomT;
+
+    const startVisibleIdx = currentCenterIdx - currentVisibleBars / 2;
+    const getX = index => plotLeft + ((index - startVisibleIdx) / currentVisibleBars) * plotW;
+
+    // Vertical Price Boundaries
+    const defaultPriceMin = globalMin - globalPadding;
+    const defaultPriceMax = globalMax + globalPadding;
+
+    const hammerMidPrice = (hammer.h + hammer.l) / 2;
+    const zoomedPriceSpan = (hammer.h - hammer.l) * (mobile ? 2.1 : 1.85);
+    const targetPriceMin = hammerMidPrice - zoomedPriceSpan * 0.48;
+    const targetPriceMax = hammerMidPrice + zoomedPriceSpan * 0.52;
+
+    const currentPriceMin = defaultPriceMin + (targetPriceMin - defaultPriceMin) * zoomT;
+    const currentPriceMax = defaultPriceMax + (targetPriceMax - defaultPriceMax) * zoomT;
+
+    const getY = price => plotBottom - ((price - currentPriceMin) / (currentPriceMax - currentPriceMin)) * plotH;
+
+    // Realistic, thick candle width
+    const barSpacing = plotW / currentVisibleBars;
+    let candleWidth = Math.round(clamp(barSpacing * 0.74, 16, mobile ? 55 : 80));
+    if (candleWidth % 2 === 0) candleWidth += 1;
+    const wickThickness = Math.max(2, Math.round(candleWidth * 0.08));
+
+    // UI Status Indicator
+    if (elapsed < formationEnd) {
+      statusText.innerText = "Building Live Candlestick Waves...";
+      statusDot.style.background = "#10b981";
+      statusDot.style.boxShadow = "0 0 10px #10b981";
+    } else if (elapsed < downLinesStart) {
+      statusText.innerText = "Uptrend Validated (HH / HL Channel)";
+      statusDot.style.background = HIGH_COLOR;
+      statusDot.style.boxShadow = "0 0 10px " + HIGH_COLOR;
+    } else if (elapsed < zoomStart) {
+      statusText.innerText = "Downtrend Structure (LH / LL Channel)";
+      statusDot.style.background = "#f87171";
+      statusDot.style.boxShadow = "0 0 10px #f87171";
+    } else {
+      statusText.innerText = "Hammer Candlestick Inspection";
+      statusDot.style.background = GOLD_LIGHT;
+      statusDot.style.boxShadow = "0 0 12px " + GOLD_LIGHT;
+    }
+
+    // Grid Levels & Price Labels
+    const gridSteps = 6;
+    for (let i = 0; i <= gridSteps; i++) {
+      const priceVal = currentPriceMin + (i / gridSteps) * (currentPriceMax - currentPriceMin);
+      const py = Math.round(getY(priceVal));
+
+      if (py >= plotTop && py <= plotBottom) {
+        crispLine(plotLeft, py, plotRight, py, "rgba(255, 255, 255, 0.04)", 1);
+        ctx.fillStyle = "rgba(148, 163, 184, 0.5)";
+        ctx.font = `${mobile ? 10 : 12}px monospace`;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(priceVal.toFixed(1), plotRight + 10, py);
+      }
+    }
+
+    // Draw Candlesticks
+    const progress = Math.min(candleData.length, elapsed / candleSec);
+    const completed = Math.floor(progress);
+    const visibleCount = Math.min(candleData.length, Math.ceil(progress));
+
+    for (let i = 0; i < visibleCount; i++) {
+      const candle = candleData[i];
+      const fraction = i < completed ? 1 : progress - i;
+      const px = Math.round(getX(i));
+
+      if (px < plotLeft - 100 || px > plotRight + 100) continue;
+
+      const isUp = candle.c >= candle.o;
+      const isHammer = candle.isHammer;
+
+      const bodyColor = (isHammer && zoomT > 0.4) ? GREEN_UP : (isUp ? GREEN_UP : RED_DOWN);
+      const borderColor = (isHammer && zoomT > 0.4) ? GREEN_BORDER : (isUp ? GREEN_BORDER : RED_BORDER);
+
+      const currClose = candle.o + (candle.c - candle.o) * fraction;
+      const currHigh = candle.o + (candle.h - candle.o) * fraction;
+      const currLow = candle.o + (candle.l - candle.o) * fraction;
+
+      const yOpen = Math.round(getY(candle.o));
+      const yClose = Math.round(getY(currClose));
+      const yHigh = Math.round(getY(currHigh));
+      const yLow = Math.round(getY(currLow));
+
+      const bodyTop = Math.min(yOpen, yClose);
+      const bodyHeight = Math.max(4, Math.abs(yOpen - yClose));
+      const bodyLeft = Math.round(px - candleWidth / 2);
+
+      if (zoomT > 0.5 && !isHammer) {
+        ctx.save();
+        ctx.globalAlpha = clamp(1 - (zoomT - 0.5) * 1.6, 0.15, 1);
+      }
+
+      // Wick
+      crispLine(px, yHigh, px, yLow, borderColor, wickThickness);
+
+      // Body (Fill + Border)
+      ctx.fillStyle = bodyColor;
+      ctx.fillRect(bodyLeft, bodyTop, candleWidth, bodyHeight);
+
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bodyLeft + 0.5, bodyTop + 0.5, candleWidth - 1, bodyHeight - 1);
+
+      if (zoomT > 0.5 && !isHammer) {
+        ctx.restore();
+      }
+    }
+
+    // Structure Swing Badges & Trendlines
+    const structureAlpha = clamp(1 - zoomT * 1.5, 0, 1);
+    if (structureAlpha > 0.01) {
+      ctx.save();
+      ctx.globalAlpha = structureAlpha;
+
+      const drawSwings = (swingsList, isDown) => {
+        swingsList.forEach((swing) => {
+          if (swing.label === "HAMMER") return;
+          const px = Math.round(getX(swing.index));
+          const py = Math.round(getY(swing.price));
+          const color = isDown ? "#f87171" : (swing.high ? HIGH_COLOR : LOW_COLOR);
+
+          ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          const badgeY = swing.high ? py - 20 : py + 20;
+
+          ctx.beginPath();
+          ctx.roundRect(px - 14, badgeY - 8, 28, 16, 4);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = color;
+          ctx.font = "bold 10px Arial";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(swing.label, px, badgeY);
+        });
+      };
+
+      if (elapsed > upLinesStart) drawSwings(uptrendSwings, false);
+      if (elapsed > downLinesStart) drawSwings(downtrendSwings, true);
+
+      // Trend Lines
+      const renderTrendLine = (p1, p2, color, startTime) => {
+        const t = easeOutQuad(clamp((elapsed - startTime) / 1.0, 0, 1));
+        if (t <= 0) return;
+
+        const x1 = Math.round(getX(p1.index));
+        const y1 = Math.round(getY(p1.price));
+        const x2 = Math.round(getX(p2.index));
+        const y2 = Math.round(getY(p2.price));
+
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 8;
+        crispLine(x1, y1, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, color, 2);
+        ctx.shadowBlur = 0;
+      };
+
+      const upHighs = uptrendSwings.filter(s => s.high);
+      const upLows = uptrendSwings.filter(s => !s.high);
+      if (upHighs.length >= 2) renderTrendLine(upHighs[0], upHighs[upHighs.length - 1], HIGH_COLOR, upLinesStart);
+      if (upLows.length >= 2) renderTrendLine(upLows[0], upLows[upLows.length - 1], LOW_COLOR, upLinesStart + 0.3);
+
+      const downHighs = downtrendSwings.filter(s => s.high);
+      const downLows = downtrendSwings.filter(s => !s.high);
+      if (downHighs.length >= 2) renderTrendLine(downHighs[0], downHighs[downHighs.length - 1], "#f87171", downLinesStart);
+      if (downLows.length >= 2) renderTrendLine(downLows[0], downLows[downLows.length - 1], "#fb923c", downLinesStart + 0.3);
+
+      ctx.restore();
+    }
+
+    // Zoomed Hammer HUD & Card Overlay
+    if (zoomT > 0.45) {
+      const hX = Math.round(getX(hammerIndex));
+      const hHighY = Math.round(getY(hammer.h));
+      const hLowY = Math.round(getY(hammer.l));
+      const hBodyTop = Math.round(getY(hammer.c));
+      const hBodyBtm = Math.round(getY(hammer.o));
+      const hudAlpha = easeOutQuad(clamp((zoomT - 0.45) / 0.55, 0, 1));
+
+      ctx.save();
+      ctx.globalAlpha = hudAlpha;
+
+      // Glow behind the hammer
+      const glowGrad = ctx.createRadialGradient(hX, (hBodyTop + hLowY) / 2, 10, hX, (hBodyTop + hLowY) / 2, 160);
+      glowGrad.addColorStop(0, "rgba(245, 158, 11, 0.22)");
+      glowGrad.addColorStop(0.5, "rgba(16, 185, 129, 0.08)");
+      glowGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = glowGrad;
+      ctx.fillRect(hX - 180, hHighY - 60, 360, (hLowY - hHighY) + 120);
+
+      // Corner Reticle
+      const boxPadX = candleWidth * 0.85;
+      const bLeft = Math.round(hX - boxPadX);
+      const bRight = Math.round(hX + boxPadX);
+      const bTop = Math.round(hHighY - 14);
+      const bBottom = Math.round(hLowY + 14);
+      const cornerLen = 14;
+
+      ctx.strokeStyle = GOLD_LIGHT;
+      ctx.lineWidth = 2;
+
+      ctx.beginPath();
+      ctx.moveTo(bLeft, bTop + cornerLen);
+      ctx.lineTo(bLeft, bTop);
+      ctx.lineTo(bLeft + cornerLen, bTop);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(bRight - cornerLen, bTop);
+      ctx.lineTo(bRight, bTop);
+      ctx.lineTo(bRight, bTop + cornerLen);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(bLeft, bBottom - cornerLen);
+      ctx.lineTo(bLeft, bBottom);
+      ctx.lineTo(bLeft + cornerLen, bBottom);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(bRight - cornerLen, bBottom);
+      ctx.lineTo(bRight, bBottom);
+      ctx.lineTo(bRight, bBottom - cornerLen);
+      ctx.stroke();
+
+      // Measurement Indicators
+      const caliperX = bLeft - 16;
+      ctx.strokeStyle = GOLD_LIGHT;
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([3, 3]);
+
+      ctx.beginPath();
+      ctx.moveTo(caliperX + 8, hBodyBtm);
+      ctx.lineTo(caliperX, hBodyBtm);
+      ctx.lineTo(caliperX, hLowY);
+      ctx.lineTo(caliperX + 8, hLowY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const wickMidY = (hBodyBtm + hLowY) / 2;
+      ctx.fillStyle = GOLD_LIGHT;
+      ctx.font = "bold 11px monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      ctx.fillText("TAIL: 3.2x BODY", caliperX - 8, wickMidY - 7);
+
+      ctx.fillStyle = "rgba(226, 232, 240, 0.75)";
+      ctx.font = "10px -apple-system, sans-serif";
+      ctx.fillText("Liquidity Sweep / Rejection", caliperX - 8, wickMidY + 8);
+
+      ctx.strokeStyle = GREEN_BORDER;
+      ctx.beginPath();
+      ctx.moveTo(caliperX + 8, hBodyTop);
+      ctx.lineTo(caliperX, hBodyTop);
+      ctx.lineTo(caliperX, hBodyBtm);
+      ctx.lineTo(caliperX + 8, hBodyBtm);
+      ctx.stroke();
+
+      const bodyMidY = (hBodyTop + hBodyBtm) / 2;
+      ctx.fillStyle = GREEN_BORDER;
+      ctx.font = "bold 11px monospace";
+      ctx.fillText("BULL BODY", caliperX - 8, bodyMidY);
+
+      // Glassmorphic Info Card
+      const cardW = mobile ? Math.min(width - 32, 270) : 310;
+      const cardH = 175;
+      const cardX = mobile ? Math.round((width - cardW) / 2) : Math.round(Math.min(plotRight - cardW, hX + boxPadX + 28));
+      const cardY = mobile ? Math.round(plotBottom - cardH - 12) : Math.round(clamp((hBodyTop + hLowY) / 2 - cardH / 2, plotTop + 10, plotBottom - cardH - 10));
+
+      ctx.shadowColor = "rgba(0, 0, 0, 0.7)";
+      ctx.shadowBlur = 24;
+      ctx.fillStyle = "rgba(13, 17, 23, 0.94)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+      ctx.lineWidth = 1;
+
+      ctx.beginPath();
+      ctx.roundRect(cardX, cardY, cardW, cardH, 12);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = GOLD_LIGHT;
+      ctx.font = "bold 14px -apple-system, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText("BULLISH HAMMER PINBAR", cardX + 16, cardY + 16);
+
+      ctx.fillStyle = "rgba(16, 185, 129, 0.15)";
+      ctx.strokeStyle = "rgba(16, 185, 129, 0.4)";
+      ctx.lineWidth = 1;
+      const tagW = 74;
+      ctx.beginPath();
+      ctx.roundRect(cardX + cardW - tagW - 16, cardY + 14, tagW, 20, 6);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "#34d399";
+      ctx.font = "bold 10px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("REVERSAL", cardX + cardW - tagW / 2 - 16, cardY + 24);
+
+      crispLine(cardX + 16, cardY + 44, cardX + cardW - 16, cardY + 44, "rgba(255, 255, 255, 0.08)", 1);
+
+      const renderParam = (label, val, xPos, yPos, valColor = "#f8fafc") => {
+        ctx.fillStyle = "rgba(148, 163, 184, 0.7)";
+        ctx.font = "10px -apple-system, sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText(label, xPos, yPos);
+
+        ctx.fillStyle = valColor;
+        ctx.font = "bold 12px monospace";
+        ctx.fillText(val, xPos, yPos + 15);
+      };
+
+      renderParam("ENTRY TRIGGER", "> " + hammer.h.toFixed(1), cardX + 16, cardY + 54, "#38bdf8");
+      renderParam("INVALIDATION / SL", "< " + hammer.l.toFixed(1), cardX + 156, cardY + 54, "#f87171");
+
+      renderParam("PRICE REJECTION", "78.4%", cardX + 16, cardY + 92, GOLD_LIGHT);
+      renderParam("TARGET RISK:REWARD", "1 : 2.8+", cardX + 156, cardY + 92, "#34d399");
+
+      ctx.fillStyle = "rgba(30, 41, 59, 0.6)";
+      ctx.beginPath();
+      ctx.roundRect(cardX + 12, cardY + cardH - 32, cardW - 24, 22, 6);
+      ctx.fill();
+
+      ctx.fillStyle = "#cbd5e1";
+      ctx.font = "11px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("✓ High confluence demand rejection pivot", cardX + cardW / 2, cardY + cardH - 21);
+
+      ctx.restore();
+    }
+  }
+
+  function resize() {
+    width = innerWidth;
+    height = innerHeight;
+    const ratio = Math.max(window.devicePixelRatio || 1, 1);
+
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    draw();
+  }
+
+  function animate(now) {
+    frameId = null;
+    if (lastTime === null) lastTime = now;
+
+    elapsed = Math.min(totalAnimationTime, elapsed + Math.min((now - lastTime) / 1000, 0.08));
+    lastTime = now;
+    draw();
+
+    if (elapsed < totalAnimationTime) {
+      frameId = requestAnimationFrame(animate);
+    }
+  }
+
+  function restartAnimation() {
+    if (frameId !== null) {
+      cancelAnimationFrame(frameId);
+      frameId = null;
+    }
+    elapsed = 0;
+    lastTime = null;
+    frameId = requestAnimationFrame(animate);
+  }
+
+  replayBtn.addEventListener("click", restartAnimation);
+  window.addEventListener("resize", resize);
+
+  document.addEventListener("visibilitychange", () => {
+    lastTime = null;
+    if (document.hidden && frameId !== null) {
+      cancelAnimationFrame(frameId);
+      frameId = null;
+    }
+    if (!document.hidden && frameId === null && elapsed < totalAnimationTime) {
+      frameId = requestAnimationFrame(animate);
+    }
+  });
+
+  resize();
+  frameId = requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>
